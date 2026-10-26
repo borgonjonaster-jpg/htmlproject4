@@ -1,0 +1,914 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chroma</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3CradialGradient id='g' cx='.35' cy='.35'%3E%3Cstop offset='0' stop-color='%23c8ff2b'/%3E%3Cstop offset='.45' stop-color='%23ff2b9c'/%3E%3Cstop offset='1' stop-color='%232c3cff'/%3E%3C/radialGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='7' fill='url(%23g)'/%3E%3C/svg%3E">
+<style>
+  /* Design system, after Apple's Liquid Glass guidance (WWDC25) with the reduced transparency reported for iOS 27:
+     controls float above the content in grouped glass bars, capsule shapes with concentric radii, one tinted
+     prominent action, monochrome glyphs, system typography, restrained motion. */
+  :root {
+    --bg: #0e0e10; --glass: rgba(38, 38, 41, .84); --glass-hi: rgba(255, 255, 255, .1); --edge: rgba(255, 255, 255, .14);
+    --fill: rgba(255, 255, 255, .09); --fill-hi: rgba(255, 255, 255, .16); --sep: rgba(255, 255, 255, .1);
+    --text: #f5f5f7; --text2: rgba(235, 235, 245, .62); --text3: rgba(235, 235, 245, .32);
+    --tint: #0a84ff; --on: #30d158;
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --ease: cubic-bezier(.2, .8, .2, 1);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); }
+  body { color: var(--text); font: 13px/1.38 var(--font); -webkit-font-smoothing: antialiased; overflow: hidden; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
+  button:disabled { opacity: .35; pointer-events: none; }
+  :focus-visible { outline: 2px solid var(--tint); outline-offset: 2px; }
+  .i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .hidden { display: none !important; }
+  .glass { background: var(--glass); -webkit-backdrop-filter: saturate(170%) blur(28px); backdrop-filter: saturate(170%) blur(28px);
+    box-shadow: inset 0 0 0 .5px var(--edge), inset 0 1px 0 var(--glass-hi), 0 10px 34px rgba(0, 0, 0, .38); }
+
+  /* workspace */
+  .stage { position: fixed; inset: 0; }
+  .viewport { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px 28px 112px; touch-action: none; }
+  .viewport.zoomed { padding: 0; cursor: grab; }
+  .viewport.panning { cursor: grabbing; }
+  .canvasbox { position: relative; flex: none; box-shadow: 0 30px 90px -30px rgba(0, 0, 0, .8); }
+  #view { display: block; width: 100%; height: 100%; }
+  .stage:fullscreen .viewport { padding: 0; }
+  .stage:fullscreen .bar, .stage:fullscreen .corner { display: none; }
+  .drop::after { content: "Drop a Chroma image to open it"; position: absolute; inset: 0; display: grid; place-items: center; background: rgba(14, 14, 16, .8); font-size: 15px; font-weight: 500; }
+
+  /* top-right group */
+  .corner { position: absolute; top: 14px; right: 14px; display: flex; gap: 8px; z-index: 5; }
+  .group { display: flex; align-items: center; height: 40px; padding: 4px; border-radius: 20px; }
+  .icon { width: 32px; height: 32px; border-radius: 16px; color: var(--text); transition: background .15s; }
+  .icon:hover { background: var(--fill); }
+  .icon:active { background: var(--fill-hi); transform: scale(.96); }
+  .icon.on { background: var(--fill-hi); }
+  .label { height: 32px; padding: 0 14px; border-radius: 16px; font-weight: 600; transition: background .15s; }
+  .label:hover { background: var(--fill); }
+
+  /* bottom bar */
+  .bar { position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; height: 64px; padding: 0 10px; border-radius: 32px; z-index: 5; max-width: calc(100vw - 24px); }
+  .gen { display: flex; align-items: center; gap: 2px; }
+  .prominent { height: 44px; padding: 0 22px; border-radius: 22px 6px 6px 22px; background: var(--tint); color: #fff; font-weight: 600; font-size: 15px; transition: filter .15s, transform .1s; }
+  .prominent:hover { filter: brightness(1.1); }
+  .prominent:active { transform: scale(.98); }
+  .more { width: 32px; height: 44px; border-radius: 6px 22px 22px 6px; background: var(--tint); color: #fff; transition: filter .15s; }
+  .more:hover { filter: brightness(1.1); }
+  .more .i { width: 14px; height: 14px; stroke-width: 2.2; }
+  .sep { width: 1px; height: 28px; background: var(--sep); margin: 0 6px; flex: none; }
+  .knobs { display: flex; gap: 16px; padding: 0 6px; }
+  .knob { width: 96px; display: flex; flex-direction: column; gap: 5px; }
+  .knob span { font-size: 11px; font-weight: 500; color: var(--text2); letter-spacing: .01em; user-select: none; display: flex; justify-content: space-between; }
+  .knob span b { font-weight: 500; color: var(--text3); font-variant-numeric: tabular-nums; opacity: 0; transition: opacity .2s; }
+  .knob:hover span b, .knob.active span b { opacity: 1; }
+  .tools { display: flex; gap: 2px; }
+  .adjustBtn { display: none; }
+  input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 22px; margin: 0; background: transparent; --v: 50%; cursor: pointer; }
+  input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(90deg, rgba(255, 255, 255, .92) var(--v), rgba(255, 255, 255, .16) var(--v)); }
+  input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; background: linear-gradient(90deg, rgba(255, 255, 255, .92) var(--v), rgba(255, 255, 255, .16) var(--v)); }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; margin-top: -8px; border-radius: 50%; background: #fff; border: 0; box-shadow: 0 2px 6px rgba(0, 0, 0, .4), 0 0 0 .5px rgba(0, 0, 0, .15); transition: transform .12s; }
+  input[type=range]:active::-webkit-slider-thumb { transform: scale(1.12); }
+  input[type=range]::-moz-range-thumb { width: 20px; height: 20px; border-radius: 50%; background: #fff; border: 0; box-shadow: 0 2px 6px rgba(0, 0, 0, .4); }
+
+  /* popovers: anchored, inset, concentric with the bar */
+  .pop { position: fixed; z-index: 30; border-radius: 22px; padding: 8px; opacity: 0; transform: translateY(6px) scale(.98); pointer-events: none; transition: opacity .16s var(--ease), transform .16s var(--ease); max-height: calc(100vh - 120px); overflow-y: auto; }
+  .pop.open { opacity: 1; transform: none; pointer-events: auto; }
+  .menu { width: 250px; }
+  .pop.glass { background: rgba(34, 34, 37, .92); }
+  .menu .styles { display: none; }
+  .menu .styles.open { display: block; }
+  .menu button { width: 100%; justify-content: space-between; height: 34px; padding: 0 12px; border-radius: 12px; font-size: 14px; }
+  .menu button:hover { background: var(--fill); }
+  .menu button .k { color: var(--text3); font-size: 13px; }
+  .menu button .ck { display: inline-block; width: 20px; color: var(--tint); }
+  .menu hr { border: 0; height: 1px; background: var(--sep); margin: 6px 10px; }
+  .menu .h { padding: 8px 12px 4px; font-size: 12px; font-weight: 600; color: var(--text3); }
+  .sheet { width: 340px; padding: 18px; }
+  .row { margin-bottom: 18px; }
+  .row:last-child { margin-bottom: 0; }
+  .row > .t { font-size: 12px; font-weight: 600; color: var(--text2); margin-bottom: 8px; display: flex; justify-content: space-between; }
+  .seg { display: flex; padding: 3px; gap: 2px; border-radius: 12px; background: var(--fill); }
+  .seg button { flex: 1; height: 30px; border-radius: 9px; font-size: 13px; font-weight: 500; color: var(--text2); min-width: 0; padding: 0 6px; transition: background .15s, color .15s; }
+  .seg button:hover { color: var(--text); }
+  .seg button.on { background: rgba(255, 255, 255, .2); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, .25); }
+  .seg .i { width: 18px; height: 18px; }
+  select.pop-select, input.field { width: 100%; height: 36px; border: 0; border-radius: 11px; background: var(--fill); color: var(--text); font: 14px var(--font); padding: 0 12px; }
+  select.pop-select { -webkit-appearance: none; appearance: none; cursor: pointer; padding-right: 30px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 14'%3E%3Cpath d='M2 5l3-3 3 3M2 9l3 3 3-3' fill='none' stroke='%23ebebf5' stroke-opacity='.7' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 12px center; background-size: 9px 13px; }
+  select.pop-select option { background: #2c2c2e; }
+  input.field { font: 13px var(--mono); }
+  input.field::placeholder { color: var(--text3); font-family: var(--font); }
+  .btn { height: 36px; padding: 0 16px; border-radius: 18px; background: var(--fill); font-weight: 500; transition: background .15s; }
+  .btn:hover { background: var(--fill-hi); }
+  .btn.primary { background: var(--tint); color: #fff; font-weight: 600; width: 100%; height: 44px; border-radius: 22px; font-size: 15px; }
+  .btn.primary:hover { filter: brightness(1.1); background: var(--tint); }
+  .btns { display: flex; gap: 8px; }
+  .btns .btn { flex: 1; }
+  .switchrow { display: flex; align-items: center; justify-content: space-between; font-size: 14px; }
+  .switch { -webkit-appearance: none; appearance: none; width: 42px; height: 26px; border-radius: 13px; background: var(--fill-hi); position: relative; cursor: pointer; margin: 0; transition: background .2s; flex: none; }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 2px 4px rgba(0, 0, 0, .3); transition: transform .2s var(--ease); }
+  .switch:checked { background: var(--on); }
+  .switch:checked::after { transform: translateX(16px); }
+  .meta { color: var(--text2); font-size: 12px; text-align: center; margin-top: 10px; font-variant-numeric: tabular-nums; }
+  details > summary { list-style: none; cursor: pointer; color: var(--text2); font-size: 13px; padding: 14px 2px 0; user-select: none; text-align: center; }
+  details > summary::-webkit-details-marker { display: none; }
+  details[open] > summary { margin-bottom: 14px; }
+  .code { font: 12px var(--mono); background: var(--fill); border-radius: 11px; padding: 10px 12px; word-break: break-all; user-select: all; }
+  .prog { height: 4px; border-radius: 2px; background: var(--fill); overflow: hidden; margin-top: 12px; }
+  .prog i { display: block; height: 100%; width: 0; background: var(--tint); transition: width .1s; }
+
+  /* palette */
+  .ramp { position: relative; margin: 2px 0 24px; }
+  .ramp .grad { height: 30px; border-radius: 11px; box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .12); }
+  .stops { position: absolute; left: 6px; right: 6px; top: 34px; height: 14px; }
+  .stop { position: absolute; width: 14px; height: 14px; margin-left: -7px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .5); cursor: ew-resize; touch-action: none; }
+  .sws { display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr)); gap: 8px; }
+  .sw { position: relative; aspect-ratio: 1; border-radius: 14px; box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .15); cursor: pointer; overflow: hidden; }
+  .sw input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0; }
+  .sw .pin, .sw .x { position: absolute; top: 4px; width: 20px; height: 20px; border-radius: 10px; background: rgba(0, 0, 0, .5); color: #fff; font-size: 12px; opacity: 0; transition: opacity .15s; z-index: 1; }
+  .sw .pin { left: 4px; } .sw .x { right: 4px; }
+  .sw:hover .pin, .sw:hover .x, .sw .pin.on { opacity: 1; }
+  .sw .pin.on { background: #fff; color: #000; }
+  .sw.add { display: grid; place-items: center; background: var(--fill); box-shadow: none; color: var(--text2); font-size: 24px; font-weight: 300; }
+
+  /* segments: the selected segment and its editor */
+  .segsel { position: absolute; pointer-events: none; border-radius: 1px; box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .95), 0 0 0 3px rgba(0, 0, 0, .3); opacity: 0; transition: opacity .15s; }
+  .segsel.on { opacity: 1; }
+  .hint { font-size: 12px; color: var(--text3); margin-top: 8px; }
+  .row > .t .act { font-size: 12px; font-weight: 500; color: var(--tint); }
+  .sheet.small { width: 300px; }
+
+  /* history */
+  .drawer { position: absolute; left: 50%; bottom: 96px; width: min(820px, calc(100vw - 24px)); border-radius: 26px; padding: 12px; z-index: 6; opacity: 0; pointer-events: none; transform: translate(-50%, 8px); transition: opacity .18s var(--ease), transform .18s var(--ease); }
+  .drawer.open { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
+  .drawer .head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .drawer .head .seg { width: 220px; }
+  .thumbs { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; min-height: 90px; align-items: center; }
+  .thumbs::-webkit-scrollbar { display: none; }
+  .thumbs:empty::before { content: attr(data-empty); color: var(--text3); padding: 0 8px; }
+  .thumb { position: relative; flex: none; height: 90px; border-radius: 12px; overflow: hidden; background: #000; }
+  .thumb img { display: block; height: 90px; }
+  .thumb.cur { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px #fff; margin: 0 4px; }
+  .thumb .x { position: absolute; top: 5px; right: 5px; width: 20px; height: 20px; border-radius: 10px; background: rgba(0, 0, 0, .55); color: #fff; opacity: 0; }
+  .thumb:hover .x { opacity: 1; }
+  .thumb .ph { width: 72px; height: 90px; }
+
+  .toast { position: absolute; left: 50%; top: 18px; padding: 10px 18px; border-radius: 20px; font-size: 13px; font-weight: 500; transform: translate(-50%, -8px); opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s var(--ease); z-index: 20; max-width: calc(100vw - 32px); text-align: center; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  .busy { position: absolute; left: 0; right: 0; top: 0; height: 2px; z-index: 20; }
+  .busy i { display: block; height: 100%; width: 0; background: var(--tint); }
+  .nogl { padding: 40px; max-width: 520px; line-height: 1.6; }
+
+  /* compact: the four controls move into one sheet; the bar keeps the actions */
+  @media (max-width: 940px) {
+    .knobs, .bar > .sep:nth-of-type(1) { display: none; }
+    .adjustBtn { display: inline-flex; }
+    .viewport { padding: 70px 14px 100px; }
+    .bar { bottom: 14px; height: 60px; }
+    .drawer { bottom: 86px; }
+    .sheet { width: min(360px, calc(100vw - 16px)); }
+    .knobs.insheet { display: flex; flex-direction: column; gap: 18px; padding: 0; }
+    .knobs.insheet .knob { width: 100%; }
+    .knobs.insheet .knob span { font-size: 13px; }
+  }
+</style>
+</head>
+<body>
+<section class="stage" id="stage">
+  <div class="viewport" id="vp"><div class="canvasbox" id="cbox"><canvas id="view" aria-label="Artwork"></canvas><div class="segsel" id="segSel"></div></div></div>
+  <div class="busy hidden" id="busyBar"><i></i></div>
+  <div class="toast glass" id="toast" role="status"></div>
+
+  <div class="corner">
+    <div class="group glass">
+      <button class="icon" id="bUndo" title="Undo (⌘Z)" aria-label="Undo"><svg class="i" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 010 11H11"/></svg></button>
+      <button class="icon" id="bRedo" title="Redo (⇧⌘Z)" aria-label="Redo"><svg class="i" viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 000 11H13"/></svg></button>
+      <button class="icon" id="bMore" title="More" aria-label="More"><svg class="i" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18" cy="12" r="1.3"/></svg></button>
+    </div>
+    <div class="group glass"><button class="label" id="bExport">Export</button></div>
+  </div>
+
+  <div class="drawer glass" id="drawer">
+    <div class="head">
+      <div class="seg" id="histTabs"><button data-t="hist">History</button><button data-t="fav">Favorites</button></div>
+      <span style="flex:1"></span>
+      <button class="icon" id="bFav" title="Favorite" aria-label="Favorite"><svg class="i" viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/></svg></button>
+      <button class="icon" id="bDrawerX" title="Close" aria-label="Close"><svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <div class="thumbs" id="thumbs"></div>
+  </div>
+
+  <nav class="bar glass" id="bar">
+    <div class="gen">
+      <button class="prominent" id="bGen" title="Generate (G)">Generate</button>
+      <button class="more" id="bGenMore" title="More ways to generate" aria-label="More ways to generate"><svg class="i" viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg></button>
+    </div>
+    <span class="sep"></span>
+    <div class="knobs" id="knobs"></div>
+    <span class="sep"></span>
+    <div class="tools">
+      <button class="icon adjustBtn" id="bAdjust" title="Adjust" aria-label="Adjust"><svg class="i" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button>
+      <button class="icon" id="bShape" title="Shape" aria-label="Shape"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M12 4v16M4 12h8"/></svg></button>
+      <button class="icon" id="bPalette" title="Palette" aria-label="Palette"><svg class="i" viewBox="0 0 24 24"><path d="M12 3a9 9 0 100 18c1.1 0 1.6-.9 1.2-1.8-.5-1.1.2-2.2 1.4-2.2H17a4 4 0 004-4c0-5.5-4-10-9-10z"/><circle cx="7.5" cy="11" r="1.1"/><circle cx="10.5" cy="7" r="1.1"/><circle cx="15.5" cy="7.5" r="1.1"/></svg></button>
+      <button class="icon" id="bHistory" title="History" aria-label="History"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></button>
+    </div>
+  </nav>
+</section>
+
+<div class="pop glass menu" id="popGen"></div>
+<div class="pop glass menu" id="popMore"></div>
+<div class="pop glass sheet" id="popAdjust"></div>
+<div class="pop glass sheet" id="popShape"></div>
+<div class="pop glass sheet small" id="popSeg"></div>
+<div class="pop glass sheet" id="popPalette">
+  <div class="ramp"><div class="grad" id="ramp"></div><div class="stops" id="stops"></div></div>
+  <div class="row"><div class="sws" id="sws"></div></div>
+  <div class="row btns"><button class="btn" id="bPalNew">New</button><button class="btn" id="bShuffle">Shuffle</button></div>
+  <div class="row"><select class="pop-select" id="harmony" aria-label="Palette"></select></div>
+  <div class="row switchrow"><span>Keep palette</span><input type="checkbox" class="switch" id="lockPal" aria-label="Keep palette"></div>
+</div>
+<div class="pop glass sheet" id="popExport">
+  <div class="row"><div class="seg" id="fmtSeg"><button data-v="png">PNG</button><button data-v="jpeg">JPEG</button><button data-v="svg">SVG</button></div></div>
+  <div class="row"><select class="pop-select" id="oTarget" aria-label="Size"></select></div>
+  <button class="btn primary" id="bDoExport">Export</button>
+  <div class="meta" id="expMeta"></div>
+  <div class="prog hidden" id="expProg"><i></i></div>
+  <div class="btns hidden" id="cancelRow" style="margin-top:10px"><button class="btn" id="bCancel">Cancel</button></div>
+  <details id="expMore"><summary>Options</summary>
+    <div class="row"><div class="t">Aspect ratio</div><select class="pop-select" id="oAspect"></select></div>
+    <div class="row" id="dpiRow"><div class="t">Resolution</div><select class="pop-select" id="oDpi"><option value="300">300 dpi</option><option value="150">150 dpi</option><option value="72">72 dpi</option></select></div>
+    <div class="row hidden" id="customRow"><div class="t">Pixels</div><div class="btns"><input class="field" id="oW" type="number" min="16" max="30000" aria-label="Width"><input class="field" id="oH" type="number" min="16" max="30000" aria-label="Height"></div></div>
+  </details>
+</div>
+<div class="pop glass sheet" id="popSeed">
+  <div class="row"><div class="t">Seed</div><div class="code" id="seedCode"></div></div>
+  <div class="row btns"><button class="btn" id="bCopySeed">Copy seed</button><button class="btn" id="bCopyRecipe">Copy recipe</button></div>
+  <div class="row"><input class="field" id="seedIn" placeholder="Paste a seed or recipe" spellcheck="false" autocomplete="off"></div>
+  <button class="btn primary" id="bApplySeed">Open</button>
+</div>
+
+<script src="chroma-core.js"></script>
+<script src="chroma-engine.js"></script>
+<script>
+'use strict';
+/*
+  CHROMA — the application. The artwork, one Generate action, four controls (Color, Structure, Softness, Depth) and,
+  on request, Shape, Palette, History, Export and the More menu. Rendering: chroma-engine.js. Generation: chroma-core.js.
+*/
+const C = window.ChromaCore, $ = id => document.getElementById(id), clamp = C.clamp;
+const clone = o => JSON.parse(JSON.stringify(o));
+const LS = {
+  get(k, d) { try { const v = localStorage.getItem('chroma.' + k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem('chroma.' + k, JSON.stringify(v)); return true; } catch (e) { return false; } },
+};
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+let toastT = 0;
+const say = t => { const el = $('toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('show'), 2400); };
+
+let engine = null, state = null, committed = '', undoS = [], redoS = [];
+let hist = LS.get('hist', []), favs = LS.get('favs', []);
+const ui = { style: 'auto', palLock: false, zoom: { fit: true, k: 1, cx: .5, cy: .5 }, tab: 'hist', drawer: false,
+  out: { aspect: '0.8', target: 'a3', dpi: '300', cw: 4000, ch: 5000, fmt: 'png' } };
+{ const s = LS.get('ui3', {}); Object.assign(ui, s, { drawer: false }); ui.out = { aspect: '0.8', target: 'a3', dpi: '300', cw: 4000, ch: 5000, fmt: 'png', ...(s.out || {}) }; if (!['jpeg', 'svg'].includes(ui.out.fmt)) ui.out.fmt = 'png'; }
+const saveUI = () => LS.set('ui3', { style: ui.style, palLock: ui.palLock, tab: ui.tab, out: ui.out });
+
+/* ---------------------------------------------------------------- output size */
+const ASPECTS = [['1', 'Square'], ['0.8', 'Portrait 4:5'], ['0.75', 'Portrait 3:4'], ['0.6667', 'Poster 2:3'], ['0.7071', 'A-series, portrait'],
+  ['1.4142', 'A-series, landscape'], ['1.7778', 'Widescreen 16:9'], ['0.5625', 'Story 9:16'], ['custom', 'Custom']];
+const TARGETS = { screen: ['Screen · 1920 px', 'long', 1920], uhd: ['4K · 3840 px', 'long', 3840], social: ['Social · 1080 px', 'short', 1080], album: ['Album cover · 3000 px', 'long', 3000],
+  a4: ['A4', 'mm', 297], a3: ['A3', 'mm', 420], a2: ['A2', 'mm', 594], a1: ['A1', 'mm', 841], a0: ['A0', 'mm', 1189], custom: ['Custom size', 'custom'] };
+function outputSize() {
+  const o = ui.out, T = TARGETS[o.target] || TARGETS.a3;
+  if (o.target === 'custom' || o.aspect === 'custom') return [clamp(o.cw | 0, 16, 30000), clamp(o.ch | 0, 16, 30000)];
+  const a = +o.aspect, L = T[1] === 'mm' ? Math.round(T[2] / 25.4 * +o.dpi) : T[2];
+  if (T[1] === 'short') return a >= 1 ? [Math.round(L * a), L] : [L, Math.round(L / a)];
+  return a >= 1 ? [L, Math.round(L / a)] : [Math.round(L * a), L];
+}
+const aspectNow = () => { const [w, h] = outputSize(); return w / h; };
+
+/* ---------------------------------------------------------------- state */
+function normalize(st) {
+  st.look = { ...C.LOOK_DEFAULT, ...(st.look || {}) }; delete st.seg;
+  if (!C.FAMILIES[st.harmony] && st.harmony !== 'custom') st.harmony = 'style';
+  if (!C.GRADIENTS[st.gradient]) st.gradient = 'fields';
+  st.geo = C.normGeo(st.geo); st.sym = { ...C.SYM_DEFAULT, ...(st.sym || {}) };
+  if (st.seeds.geo == null) st.seeds.geo = st.seeds.comp;
+  return st;
+}
+let sceneMemo = { key: '', sc: null };
+function scene() {
+  const key = JSON.stringify(state) + '|' + aspectNow().toFixed(5);
+  if (key !== sceneMemo.key) sceneMemo = { key, sc: C.compile(state, aspectNow(), {}) };
+  return sceneMemo.sc;
+}
+
+/* ---------------------------------------------------------------- the four controls */
+const knobs = [];
+function buildKnobs(box) {
+  for (const [id, label] of C.LOOK) {
+    const k = document.createElement('label'); k.className = 'knob';
+    k.innerHTML = `<span>${label}<b></b></span><input type="range" min="0" max="1" step="0.005" aria-label="${label}">`;
+    const el = k.querySelector('input'), val = k.querySelector('b');
+    const paint = () => { el.style.setProperty('--v', (el.value * 100).toFixed(1) + '%'); val.textContent = Math.round(el.value * 100); };
+    el.addEventListener('input', () => { state.look[id] = +el.value; syncKnobs(); render(true); });
+    el.addEventListener('change', () => { render(); commit(); });
+    el.addEventListener('pointerdown', () => k.classList.add('active')); el.addEventListener('pointerup', () => k.classList.remove('active'));
+    k.querySelector('span').addEventListener('dblclick', e => { e.preventDefault(); state.look[id] = .5; syncKnobs(); render(); commit(); });
+    knobs.push({ id, el, paint });
+    box.append(k);
+  }
+}
+function syncKnobs() { for (const k of knobs) { k.el.value = state.look[k.id]; k.paint(); } }   // the bar and the compact sheet share the same four controls
+buildKnobs($('knobs'));
+{ const box = document.createElement('div'); box.className = 'knobs insheet'; $('popAdjust').append(box); buildKnobs(box); }
+
+/* ---------------------------------------------------------------- shape */
+const SYM_ICON = {
+  none: '<svg class="i" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>',
+  v: '<svg class="i" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M12 3v18" stroke-dasharray="2 2"/></svg>',
+  h: '<svg class="i" viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="16" rx="2"/><path d="M3 12h18" stroke-dasharray="2 2"/></svg>',
+  vh: '<svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M12 2v20M2 12h20" stroke-dasharray="2 2"/></svg>',
+  rot: '<svg class="i" viewBox="0 0 24 24"><path d="M19 12a7 7 0 11-2.05-4.95"/><path d="M19 4v4h-4"/></svg>',
+  modules: '<svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/></svg>',
+};
+const SYM_NAME = { none: 'No symmetry', v: 'Mirror left and right', h: 'Mirror top and bottom', vh: 'Four quadrants', rot: 'Rotate 180°', modules: 'Mirrored tiles' };
+function seg(title, options, get, set, show = () => true) {
+  return { title, options, get, set, show };
+}
+const LAYOUT_ICON = {
+  mixed: '<svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M11 4v16M11 10h9M15.5 10v10"/></svg>',
+  columns: '<svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 4v16M13 4v16"/></svg>',
+  rows: '<svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9h16M4 13h16"/></svg>',
+  grid: '<svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9.3 4v16M14.7 4v16M4 12h16"/></svg>',
+  golden: '<svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M13.9 4v16M13.9 10.1H20M17 10.1v9.9"/></svg>',
+  nested: '<svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 4v16M8 8h12M16 8v12M8 16h8"/></svg>',
+};
+// Segments divide the composition; the style's gradient is what every segment renders. 1 = not divided.
+const isSeg = () => state.geo.count > 1;
+// the gradient type: the style's free fields, or one of the three basic gradients (each segment can also have its own)
+const GRAD_ICON = [
+  '<svg class="i" viewBox="0 0 24 24"><path d="M5 15c2-6 6 2 9-4 2-4 4-2 5-1M6 19c3-3 5 0 8-2 3-2 3-5 5-5"/></svg>',
+  '<svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 4v16M14 4v16M19 4v16" stroke-opacity=".55"/></svg>',
+  '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1.2"/></svg>',
+  '<svg class="i" viewBox="0 0 24 24"><path d="M12 3l9 9-9 9-9-9z"/><path d="M12 7.5l4.5 4.5-4.5 4.5L7.5 12z"/></svg>',
+];
+const SHAPE = [
+  seg('Gradient', Object.keys(C.GRADIENTS).map(k => [k, C.GRADIENTS[k]]), () => state.gradient, v => { state.gradient = v; }),
+  { count: true },
+  seg('Layout', Object.keys(C.LAYOUTS).map(k => [k, LAYOUT_ICON[k], C.LAYOUTS[k]]), () => state.geo.layout, v => { state.geo.layout = v; state.geo.edits = {}; state.geo.splits = []; }, isSeg),
+  seg('Boundaries', [['seamless', 'Seamless'], ['defined', 'Defined']], () => state.geo.edges, v => { state.geo.edges = v; }, isSeg),
+  seg('Symmetry', Object.keys(SYM_ICON).map(k => [k, SYM_ICON[k], SYM_NAME[k]]), () => state.sym.mode, v => { state.sym.mode = v; }),
+];
+// rows that only apply to a divided composition appear and disappear as the count crosses 1, while it is being dragged
+function syncShapeRows() {
+  const p = $('popShape');
+  p.querySelectorAll('[data-seg]').forEach(r => r.classList.toggle('hidden', !isSeg()));
+  if (openPop === p) p.style.top = Math.max(8, $('bar').getBoundingClientRect().top - p.offsetHeight - 10) + 'px';   // stays anchored above the bar as it grows
+}
+// the number of segments: raising it subdivides the current layout; New layout draws another one
+function countRow() {
+  const r = document.createElement('div'); r.className = 'row';
+  r.innerHTML = `<div class="t"><span>Segments <b class="n" style="font-weight:500;color:var(--text3)"></b></span><button class="act" data-seg>New layout</button></div>` +
+    `<input type="range" min="1" max="${C.SEG_MAX}" step="1" aria-label="Segments"><div class="hint" data-seg>Click a segment in the image to edit it.</div>`;
+  const el = r.querySelector('input'), n = r.querySelector('.n');
+  const paint = () => { el.style.setProperty('--v', ((el.value - 1) / (C.SEG_MAX - 1) * 100).toFixed(1) + '%'); n.textContent = isSeg() ? scene().info.segments : 'None'; };
+  el.value = state.geo.count; paint();
+  el.addEventListener('input', () => { state.geo.count = +el.value; hideSel(); paint(); syncShapeRows(); render(true); });
+  el.addEventListener('change', () => { render(); commit(); });
+  r.querySelector('.act').addEventListener('click', () => { state.seeds.geo = C.newSeed(); state.geo.edits = {}; state.geo.splits = []; hideSel(); paint(); render(); commit(); });
+  return r;
+}
+function buildShape() {
+  const p = $('popShape'); p.innerHTML = '';
+  for (const s of SHAPE) {
+    if (s.count) { p.append(countRow()); continue; }
+    const r = document.createElement('div'); r.className = 'row';
+    if (s.show === isSeg) r.dataset.seg = '';
+    r.innerHTML = (s.title ? `<div class="t">${s.title}</div>` : '') + `<div class="seg">${s.options.map(([v, l, t]) => `<button data-v="${v}"${t ? ` title="${t}" aria-label="${t}"` : ''}${String(s.get()) === v ? ' class="on"' : ''}>${l}</button>`).join('')}</div>`;
+    r.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { s.set(b.dataset.v); hideSel(); buildShape(); render(); commit(); }));
+    p.append(r);
+  }
+  syncShapeRows();
+}
+
+/* ---------------------------------------------------------------- one segment: select it in the image, edit it here */
+let sel = null, downAt = null, clickT = 0;   // sel: the selected segment's path and the rectangle of the copy that was clicked
+function hideSel() { sel = null; $('segSel').classList.remove('on'); if (openPop === $('popSeg')) closePops(); }
+function placeSel() {
+  const el = $('segSel');
+  if (!sel || !curView) { el.classList.remove('on'); return; }
+  const w = curView, [u0, v0, u1, v1] = sel.rect, x0 = (u0 * w.W - w.ox) * w.ds, y0 = (v0 * w.H - w.oy) * w.ds;
+  Object.assign(el.style, { left: x0 + 'px', top: y0 + 'px', width: ((u1 * w.W - w.ox) * w.ds - x0) + 'px', height: ((v1 * w.H - w.oy) * w.ds - y0) + 'px' });
+  el.classList.add('on');
+}
+function selectSeg(u, v) {
+  if (u < 0 || u > 1 || v < 0 || v > 1) return;
+  sel = C.segAt(state, aspectNow(), u, v); placeSel();
+  closePops(); buildSegEditor();
+  const p = $('popSeg'); p.classList.add('open'); openPop = p; openAnchor = $('segSel');
+  const r = $('segSel').getBoundingClientRect(), w = p.offsetWidth, h = p.offsetHeight, barTop = $('bar').getBoundingClientRect().top;
+  // below the segment, else above it, else beside it, else over its middle
+  let x = clamp(r.left + r.width / 2 - w / 2, 8, innerWidth - w - 8), y = r.bottom + 10;
+  if (y + h > barTop - 8) y = r.top - h - 10;
+  if (y < 8) {
+    y = clamp(r.top + r.height / 2 - h / 2, 8, barTop - h - 8);
+    if (r.right + 10 + w <= innerWidth - 8) x = r.right + 10; else if (r.left - 10 - w >= 8) x = r.left - 10 - w;
+  }
+  p.style.left = x + 'px'; p.style.top = y + 'px';
+}
+// a segment renders the chosen gradient type, or its own: Fields shows the style's composition through the segment's
+// view, Linear, Radial and Diamond are the segment's own gradient along the palette. New draws another one of that kind,
+// Turn rotates it a quarter, Split divides the segment
+function buildSegEditor() {
+  const p = $('popSeg'), e = state.geo.edits[sel.path], type = (scene().info.segTypes || {})[sel.path] ?? 0, names = Object.values(C.GRADIENTS);
+  p.innerHTML = `<div class="row"><div class="seg">${GRAD_ICON.map((ic, k) => `<button data-t="${k}" title="${names[k]}" aria-label="${names[k]}"${k === type ? ' class="on"' : ''}>${ic}</button>`).join('')}</div></div>` +
+    `<div class="row btns"><button class="btn" data-a="roll" title="Another gradient of this kind">New</button><button class="btn" data-a="rot" title="Turn a quarter">Turn</button></div>` +
+    `<div class="row btns"><button class="btn" data-a="split" title="Divide this segment in two">Split</button><button class="btn" data-a="reset"${e ? '' : ' disabled'}>Reset</button></div>`;
+  const edit = f => { const o = state.geo.edits[sel.path] || {}; f(o); state.geo.edits[sel.path] = o; };
+  p.querySelectorAll('[data-t]').forEach(b => b.addEventListener('click', () => { edit(o => { o.type = +b.dataset.t; }); segChanged(); }));
+  p.querySelectorAll('[data-a]').forEach(b => b.addEventListener('click', () => {
+    const a = b.dataset.a;
+    if (a === 'roll') edit(o => { o.roll = (o.roll | 0) + 1; });
+    else if (a === 'rot') edit(o => { o.rot = ((o.rot | 0) + 1) % 4; });
+    else if (a === 'reset') delete state.geo.edits[sel.path];
+    else if (a === 'split') {
+      const before = scene().info.segments;
+      state.geo.splits = [...state.geo.splits, sel.path];
+      if (scene().info.segments === before) { state.geo.splits.pop(); say('This segment is too small to split'); return; }
+      delete state.geo.edits[sel.path]; render(); commit(); hideSel(); return;
+    }
+    segChanged();
+  }));
+}
+function segChanged() { render(); commit(); buildSegEditor(); }
+
+/* ---------------------------------------------------------------- palette */
+function rampCSS(pal) {
+  const o = pal.slice().sort((a, b) => a.pos - b.pos), stops = [];
+  for (let k = 0; k < o.length; k++) {
+    if (!k) { stops.push(`${o[0].hex} ${(o[0].pos * 100).toFixed(1)}%`); continue; }
+    const A = C.color.hex2ok(o[k - 1].hex), B = C.color.hex2ok(o[k].hex), p0 = o[k - 1].pos, p1 = o[k].pos;
+    for (let j = 1; j <= 6; j++) { const t = j / 6; stops.push(`${C.color.ok2hex(C.color.mixc(A, B, C.color.ease(t), .8))} ${((p0 + (p1 - p0) * t) * 100).toFixed(1)}%`); }
+  }
+  return `linear-gradient(90deg, ${stops.join(', ')})`;
+}
+function syncPalette() {
+  const pal = state.palette;
+  $('ramp').style.background = rampCSS(pal);
+  const st = $('stops'); st.innerHTML = '';
+  pal.forEach(s => {
+    const d = document.createElement('div'); d.className = 'stop'; d.style.left = (s.pos * 100) + '%'; d.style.background = s.hex;
+    d.addEventListener('pointerdown', e => {
+      e.preventDefault(); d.setPointerCapture(e.pointerId);
+      const r = st.getBoundingClientRect();
+      const mv = ev => { s.pos = clamp((ev.clientX - r.left) / r.width, 0, 1); d.style.left = (s.pos * 100) + '%'; $('ramp').style.background = rampCSS(pal); keepPalette(); render(true); };
+      const up = () => { d.removeEventListener('pointermove', mv); d.removeEventListener('pointerup', up); render(); commit(); };
+      d.addEventListener('pointermove', mv); d.addEventListener('pointerup', up);
+    });
+    st.append(d);
+  });
+  const box = $('sws'); box.innerHTML = '';
+  pal.forEach((s, i) => {
+    const d = document.createElement('div'); d.className = 'sw'; d.style.background = s.hex; d.title = s.hex;
+    d.innerHTML = `<input type="color" value="${s.hex}" aria-label="Color ${i + 1}"><button class="pin${s.lock ? ' on' : ''}" title="Keep this color">●</button>${pal.length > 2 ? '<button class="x" title="Remove">×</button>' : ''}`;
+    const inp = d.querySelector('input');
+    inp.addEventListener('input', () => { s.hex = inp.value; d.style.background = s.hex; $('ramp').style.background = rampCSS(pal); keepPalette(); markCustom(); render(true); });
+    inp.addEventListener('change', () => { syncPalette(); render(); commit(); });
+    d.querySelector('.pin').addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); s.lock = !s.lock; syncPalette(); commit(); });
+    const x = d.querySelector('.x');
+    if (x) x.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); pal.splice(i, 1); keepPalette(); markCustom(); syncPalette(); render(); commit(); });
+    box.append(d);
+  });
+  if (pal.length < 10) {
+    const add = document.createElement('button'); add.className = 'sw add'; add.title = 'Add a color'; add.textContent = '+';
+    add.addEventListener('click', () => {
+      const o = pal.slice().sort((a, b) => a.pos - b.pos); let gi = 1, gap = -1;
+      for (let k = 1; k < o.length; k++) if (o[k].pos - o[k - 1].pos > gap) { gap = o[k].pos - o[k - 1].pos; gi = k; }
+      const A = o[gi - 1], B = o[gi] || A, m = C.color.mixc(C.color.hex2ok(A.hex), C.color.hex2ok(B.hex), .5, 1);
+      pal.push({ hex: C.color.ok2hex(m), pos: (A.pos + B.pos) / 2 });   // the colour halfway between its neighbours: nothing foreign
+      keepPalette(); syncPalette(); render(); commit();
+    });
+    box.append(add);
+  }
+  $('harmony').innerHTML = familyOptions(); $('harmony').value = state.harmony; $('lockPal').checked = ui.palLock;
+}
+// palette families: Style lets the style choose; Custom appears once a colour has been edited by hand
+const familyOptions = () => Object.entries({ ...C.FAMILIES, ...(state.harmony === 'custom' ? { custom: 'Custom' } : {}) }).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('');
+const markCustom = () => { if (state.harmony !== 'custom') { state.harmony = 'custom'; $('harmony').innerHTML = familyOptions(); $('harmony').value = 'custom'; } };
+function keepPalette() { if (!ui.palLock) { ui.palLock = true; $('lockPal').checked = true; saveUI(); } }
+function newPalette(seed, st = state) {
+  const fam = st.harmony === 'custom' ? 'style' : st.harmony, fresh = C.paletteForFamily(C.stream(seed, 'palette', fam), fam, st.dir);
+  if (st.harmony === 'custom') st.harmony = 'style';
+  state.palette.forEach((s, i) => { if (s.lock) { if (i < fresh.length) fresh[i] = { ...s }; else fresh.push({ ...s }); } });
+  return fresh;
+}
+$('bPalNew').addEventListener('click', () => { state.palette = newPalette(C.newSeed()); state.roleSeed = 0; syncPalette(); render(); commit(); });   // a new palette in the chosen family
+$('bShuffle').addEventListener('click', () => {
+  state.roleSeed = C.newSeed();
+  const r = C.rng(state.roleSeed), pos = state.palette.map(s => s.pos);
+  for (let i = pos.length - 1; i > 0; i--) { const k = Math.floor(r() * (i + 1)); [pos[i], pos[k]] = [pos[k], pos[i]]; }
+  state.palette.forEach((s, i) => { if (!s.lock) s.pos = pos[i]; });
+  keepPalette(); syncPalette(); render(); commit();
+});
+$('harmony').addEventListener('change', () => { state.harmony = $('harmony').value; state.palette = newPalette(C.newSeed()); state.roleSeed = 0; syncPalette(); render(); commit(); });
+$('lockPal').addEventListener('change', () => { ui.palLock = $('lockPal').checked; saveUI(); });
+
+/* ---------------------------------------------------------------- popovers */
+let openPop = null, openAnchor = null;
+function togglePop(id, anchor, place = 'above') {
+  const p = $(id);
+  if (openPop === p) { closePops(); return; }
+  closePops();
+  if (id === 'popShape') buildShape();
+  if (id === 'popPalette') syncPalette();
+  if (id === 'popExport') syncExport();
+  if (id === 'popGen') buildGenMenu();
+  if (id === 'popMore') buildMore();
+  p.classList.add('open'); openPop = p; openAnchor = anchor; anchor.classList.add('on');
+  const r = anchor.getBoundingClientRect(), w = p.offsetWidth, h = p.offsetHeight;
+  const x = clamp(place === 'below' ? r.right - w : r.left + r.width / 2 - w / 2, 8, innerWidth - w - 8);
+  const y = place === 'below' ? r.bottom + 10 : Math.max(8, $('bar').getBoundingClientRect().top - h - 10);
+  p.style.left = x + 'px'; p.style.top = y + 'px';
+}
+function closePops() { if (openPop) { if (openPop.id === 'popSeg') sel = null; openPop.classList.remove('open'); openAnchor.classList.remove('on'); } openPop = openAnchor = null; }
+document.addEventListener('pointerdown', e => { if (openPop && !openPop.contains(e.target) && !openAnchor.contains(e.target)) closePops(); });
+$('bGenMore').addEventListener('click', () => togglePop('popGen', $('bGenMore')));
+$('bShape').addEventListener('click', () => togglePop('popShape', $('bShape')));
+$('bPalette').addEventListener('click', () => togglePop('popPalette', $('bPalette')));
+$('bAdjust').addEventListener('click', () => togglePop('popAdjust', $('bAdjust')));
+$('bMore').addEventListener('click', () => togglePop('popMore', $('bMore'), 'below'));
+$('bExport').addEventListener('click', () => togglePop('popExport', $('bExport'), 'below'));
+
+const item = (a, label, k = '', ck = null) => `<button data-a="${a}"><span>${ck != null ? `<span class="ck">${ck}</span>` : ''}${label}</span><span class="k">${k}</span></button>`;
+function buildGenMenu() {
+  const ck = v => ui.style === v ? '✓' : '';
+  const current = ui.style === 'auto' ? 'Any' : ui.style === 'hybrid' ? 'Hybrid' : C.getDirection(ui.style).name;
+  $('popGen').innerHTML = item('regen', 'Regenerate', 'R') + item('var', 'Variation', 'V') + item('rand', 'Randomize', 'X') + '<hr>' +
+    item('styles', 'Style', esc(current) + ' ›') + '<div class="styles">' +
+    item('s:auto', 'Any', '', ck('auto')) + item('s:hybrid', 'Hybrid', '', ck('hybrid')) +
+    C.DIRECTIONS.map(d => item('s:' + d.id, esc(d.name), '', ck(d.id))).join('') + '</div>';
+  $('popGen').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    const a = b.dataset.a;
+    if (a === 'styles') { $('popGen').querySelector('.styles').classList.toggle('open'); const p = $('popGen'); p.style.top = Math.max(8, $('bar').getBoundingClientRect().top - p.offsetHeight - 10) + 'px'; return; }
+    closePops();
+    if (a === 'regen') regenerate(); else if (a === 'var') variation(); else if (a === 'rand') randomize();
+    else { ui.style = a.slice(2); saveUI(); if (ui.style !== 'auto' && ui.style !== 'hybrid') generate(); }
+  }));
+}
+function buildMore() {
+  const fav = favs.some(f => f.r === C.encodeRecipe(state));
+  $('popMore').innerHTML = item('fav', fav ? 'Remove from Favorites' : 'Add to Favorites') + item('seed', 'Seed and Recipe') + '<hr>' + item('full', 'Full Screen', 'F') + item('reset', 'Reset Controls');
+  $('popMore').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    const a = b.dataset.a; closePops();
+    if (a === 'fav') toggleFav(); else if (a === 'seed') openSeed(); else if (a === 'full') toggleFull(); else if (a === 'reset') reset();
+  }));
+}
+function openSeed() { $('seedCode').textContent = C.seedCode(state); $('seedIn').value = ''; togglePop('popSeed', $('bMore'), 'below'); }
+async function copyText(t, ok) { try { await navigator.clipboard.writeText(t); say(ok); } catch (e) { say('Copying is blocked here — select the text instead'); } }
+$('bCopySeed').addEventListener('click', () => copyText(C.seedCode(state), 'Seed copied'));
+$('bCopyRecipe').addEventListener('click', () => copyText(C.encodeRecipe(state), 'Recipe copied'));
+function applyText(txt) {
+  txt = (txt || '').trim(); if (!txt) return false;
+  try {
+    const st = /^chroma\d*:/.test(txt) ? C.decodeRecipe(txt) : C.fromSeed(txt);
+    if (!st) { say('That is not a Chroma seed or recipe'); return false; }
+    state = normalize(st); landed(); closePops(); return true;
+  } catch (e) { say('That is not a Chroma seed or recipe'); return false; }
+}
+$('bApplySeed').addEventListener('click', () => applyText($('seedIn').value));
+$('seedIn').addEventListener('keydown', e => { if (e.key === 'Enter') applyText($('seedIn').value); });
+
+/* ---------------------------------------------------------------- render */
+const view = $('view'), cbox = $('cbox'), vp = $('vp');
+let raf = 0, idleT = 0, curView = null, rafFallback = 0;
+function viewFor(fast) {
+  const [W, H] = outputSize(), dpr = Math.min(window.devicePixelRatio || 1, 2), cs = getComputedStyle(vp);
+  const vw = Math.max(40, vp.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)), vh = Math.max(40, vp.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom));
+  const fitS = Math.min(vw / W, vh / H), ds = ui.zoom.fit ? fitS : ui.zoom.k / dpr;
+  const cssW = Math.max(16, Math.min(vw, W * ds)), cssH = Math.max(16, Math.min(vh, H * ds));
+  const visW = cssW / ds, visH = cssH / ds;
+  const ox = clamp(ui.zoom.cx * W - visW / 2, 0, Math.max(0, W - visW)), oy = clamp(ui.zoom.cy * H - visH / 2, 0, Math.max(0, H - visH));
+  let bw = Math.round(cssW * dpr * (fast ? .5 : 1));
+  const maxPx = fast ? 9e5 : 3.2e6; if (bw * bw * cssH / cssW > maxPx) bw = Math.round(Math.sqrt(maxPx * cssW / cssH));
+  const scl = visW / bw, bh = Math.max(8, Math.round(visH / scl));
+  return { W, H, ox, oy, scl, tw: Math.max(8, bw), th: bh, cssW, cssH, ds, dpr, fitS };
+}
+function render(fast) {
+  if (!engine || !state || busy) return;
+  cancelAnimationFrame(raf); clearTimeout(rafFallback);
+  const go = () => { cancelAnimationFrame(raf); clearTimeout(rafFallback); draw(!!fast); };   // animation frames pause in background views
+  raf = requestAnimationFrame(go); rafFallback = setTimeout(go, 150);
+  clearTimeout(idleT);
+  if (fast) idleT = setTimeout(() => render(false), 220);
+}
+function draw(fast) {
+  const v = viewFor(fast);
+  try { engine.preview(scene(), v); } catch (e) { say('Rendering failed: ' + e.message); console.error(e); return; }
+  cbox.style.width = v.cssW + 'px'; cbox.style.height = v.cssH + 'px';
+  vp.classList.toggle('zoomed', !ui.zoom.fit);
+  curView = v; placeSel();
+}
+
+/* ---------------------------------------------------------------- undo, history, favorites */
+function commit() {
+  const s = JSON.stringify(state);
+  if (s === committed) return;
+  if (committed) { undoS.push(committed); if (undoS.length > 120) undoS.shift(); }
+  committed = s; redoS = [];
+  syncUndo(); syncFav(); LS.set('last', C.encodeRecipe(state));
+}
+function syncUndo() { $('bUndo').disabled = !undoS.length; $('bRedo').disabled = !redoS.length; }
+function restore(s) { state = normalize(JSON.parse(s)); hideSel(); syncAll(); render(); syncUndo(); LS.set('last', C.encodeRecipe(state)); }
+function undo() { if (!undoS.length) return; redoS.push(committed); committed = undoS.pop(); restore(committed); }
+function redo() { if (!redoS.length) return; undoS.push(committed); committed = redoS.pop(); restore(committed); }
+function thumbURL(st, h = 90) {
+  if (!engine) return null;                                     // not ready yet: the strip draws it later
+  const [W, H] = outputSize(), a = W / H, th = h * 2, tw = Math.max(8, Math.round(th * a)), rh = Math.round(H / (W / tw));
+  const px = engine.pixels(C.compile(st, a, {}), W, H, 0, 0, W / tw, tw, rh);
+  const c = document.createElement('canvas'); c.width = tw; c.height = rh;
+  c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(px.buffer), tw, rh), 0, 0);
+  return c.toDataURL('image/jpeg', .82);
+}
+function pushHistory() {
+  const r = C.encodeRecipe(state);
+  hist = hist.filter(h => h.r !== r);
+  hist.unshift({ r, url: null }); hist = hist.slice(0, 40);
+  LS.set('hist', hist.slice(0, 24).map(h => ({ r: h.r })));
+  if (ui.drawer) drawStrip();
+}
+let thumbQ = 0;
+function drawStrip() {
+  const box = $('thumbs'); box.innerHTML = '';
+  box.dataset.empty = ui.tab === 'fav' ? 'No favorites yet' : 'Nothing yet';
+  document.querySelectorAll('#histTabs button').forEach(b => b.classList.toggle('on', b.dataset.t === ui.tab));
+  const list = ui.tab === 'fav' ? favs : hist, cur = C.encodeRecipe(state);
+  list.forEach((h, i) => {
+    const b = document.createElement('div'); b.className = 'thumb' + (h.r === cur ? ' cur' : '');
+    b.innerHTML = (h.url ? `<img alt="" src="${h.url}">` : '<div class="ph"></div>') + (ui.tab === 'fav' ? '<button class="x" title="Remove">×</button>' : '');
+    b.addEventListener('click', () => { try { state = normalize(C.decodeRecipe(h.r)); syncAll(); render(); commit(); drawStrip(); } catch (e) { say('Could not open this image'); } });
+    const x = b.querySelector('.x');
+    if (x) x.addEventListener('click', e => { e.stopPropagation(); favs.splice(i, 1); LS.set('favs', favs); drawStrip(); syncFav(); });
+    box.append(b);
+  });
+  clearTimeout(thumbQ);   // thumbnails missing after a reload are rendered lazily
+  const todo = list.find(h => !h.url);
+  if (todo) thumbQ = setTimeout(() => { try { todo.url = thumbURL(normalize(C.decodeRecipe(todo.r))); } catch (e) { todo.url = 'data:,'; } drawStrip(); render(); }, 30);
+}
+function syncFav() { const on = favs.some(f => f.r === C.encodeRecipe(state)); $('bFav').querySelector('path').setAttribute('fill', on ? 'currentColor' : 'none'); }
+function toggleFav() {
+  const r = C.encodeRecipe(state), i = favs.findIndex(f => f.r === r);
+  if (i >= 0) { favs.splice(i, 1); say('Removed from Favorites'); }
+  else { favs.unshift({ r, url: thumbURL(state) }); say('Added to Favorites'); render(); }
+  favs = favs.slice(0, 80);
+  if (!LS.set('favs', favs)) say('Storage is full — favorites last for this session');
+  syncFav(); if (ui.drawer) drawStrip();
+}
+$('bFav').addEventListener('click', toggleFav);
+function setDrawer(on) { ui.drawer = on; $('drawer').classList.toggle('open', on); $('bHistory').classList.toggle('on', on); if (on) drawStrip(); }
+$('bHistory').addEventListener('click', () => { closePops(); setDrawer(!ui.drawer); });
+$('bDrawerX').addEventListener('click', () => setDrawer(false));
+document.querySelectorAll('#histTabs button').forEach(b => b.addEventListener('click', () => { ui.tab = b.dataset.t; saveUI(); drawStrip(); }));
+function syncAll() { normalize(state); syncKnobs(); if (openPop === $('popShape')) buildShape(); syncPalette(); syncFav(); }
+function landed() {
+  hideSel(); syncAll(); commit(); render(); pushHistory();
+  setTimeout(() => { const e = hist[0]; if (e && !e.url) { e.url = thumbURL(state); if (ui.drawer) drawStrip(); render(); } }, 30);
+}
+
+/* ---------------------------------------------------------------- generation */
+// the four controls and the shape are the user's; everything else belongs to the style
+const freshComposition = st => { st.seeds.comp = C.newSeed(); st.seeds.detail = C.newSeed(); st.seeds.geo = st.seeds.comp; st.seeds.v = 0; st.focal = null; st.structure = 'auto'; st.flow = 'auto'; st.edits = {}; st.dups = []; st.pinned = []; st.geo = { ...st.geo, edits: {}, splits: [] }; };
+function chooseStyle(seed) {
+  if (ui.style === 'auto') return C.pickDirection(C.stream(seed, 'dir'));
+  if (ui.style === 'hybrid') return C.pickDirection(C.stream(seed, 'dir'), 1);
+  return ui.style;
+}
+function generate() {
+  const st = clone(state);
+  st.seeds.style = C.newSeed(); st.dir = chooseStyle(st.seeds.style); freshComposition(st);
+  st.params = C.directionParams(st.dir, st.seeds.style);
+  if (!ui.palLock) { st.palette = newPalette(C.mix32(st.seeds.style, 7), st); st.roleSeed = 0; }
+  state = st; landed();
+}
+function regenerate() { const st = clone(state); freshComposition(st); state = st; landed(); }
+function variation() { const st = clone(state); st.seeds.v = (st.seeds.v | 0) + 1; state = st; landed(); }
+function randomize() {
+  const st = clone(state), seed = C.newSeed(), r = C.stream(seed, 'ui');
+  st.seeds.style = C.newSeed(); st.dir = C.pickDirection(C.stream(seed, 'rdir'), .6); freshComposition(st);
+  st.params = C.randomParams(seed);
+  st.params.gtype = r() < .3 ? C.pick(r, Object.keys(C.GTYPES).filter(k => k !== 'vector' && k !== 'auto')) : 'auto';
+  for (const [k] of C.LOOK) st.look[k] = +(.2 + .6 * r()).toFixed(2);
+  st.geo = C.normGeo({ layout: C.pick(r, Object.keys(C.LAYOUTS)), count: r() < .55 ? 1 : C.pick(r, [2, 3, 4, 5, 6, 8, 10, 12, 16, 24, 36]), edges: r() < .6 ? 'seamless' : 'defined' });
+  st.sym = { mode: r() < .6 ? 'none' : C.pick(r, ['v', 'h', 'vh', 'rot', 'modules']) };
+  if (!ui.palLock) { st.harmony = C.pickW(r, { style: 4, warm: 1, cool: 1, earth: 1, neon: 1, pastel: 1, mono: 1, metallic: 1 }); st.palette = newPalette(C.mix32(seed, 11), st); st.roleSeed = 0; }
+  st.gradient = C.pickW(r, { fields: 3, linear: 1, radial: 1, diamond: 1 });
+  state = st; landed();
+}
+function reset() { state.look = { ...C.LOOK_DEFAULT }; syncAll(); render(); commit(); }
+$('bGen').addEventListener('click', generate);
+$('bUndo').addEventListener('click', undo); $('bRedo').addEventListener('click', redo);
+
+/* ---------------------------------------------------------------- canvas: zoom and pan */
+function cssToUV(x, y) { const w = curView; return [(w.ox + x / w.ds) / w.W, (w.oy + y / w.ds) / w.H]; }
+let drag = null;
+vp.addEventListener('pointerdown', e => {
+  if (!curView || busy || ui.zoom.fit) return;
+  vp.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, cx: ui.zoom.cx, cy: ui.zoom.cy }; vp.classList.add('panning');
+});
+vp.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const w = curView; ui.zoom.cx = clamp(drag.cx - (e.clientX - drag.x) / w.ds / w.W, 0, 1); ui.zoom.cy = clamp(drag.cy - (e.clientY - drag.y) / w.ds / w.H, 0, 1); render(true);
+});
+const endDrag = () => { if (drag) { drag = null; vp.classList.remove('panning'); render(); } };
+vp.addEventListener('pointerup', endDrag); vp.addEventListener('pointercancel', endDrag);
+vp.addEventListener('dblclick', e => { clearTimeout(clickT); if (e.target.closest('#cbox')) setZoom(ui.zoom.fit ? 1 : 'fit'); });
+// a click (not a drag) on the image selects the segment under it
+vp.addEventListener('pointerdown', e => { downAt = [e.clientX, e.clientY]; }, true);
+cbox.addEventListener('click', e => {
+  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4 || !isSeg() || busy || !curView) return;
+  const r = view.getBoundingClientRect(), [u, v] = cssToUV(e.clientX - r.left, e.clientY - r.top);
+  clearTimeout(clickT); clickT = setTimeout(() => selectSeg(u, v), 230);   // a double click zooms instead
+});
+vp.addEventListener('wheel', e => {
+  if (!curView) return;
+  e.preventDefault();
+  const w = curView, r = view.getBoundingClientRect(), [u, v] = cssToUV(e.clientX - r.left, e.clientY - r.top);
+  const nk = clamp(w.ds * w.dpr * Math.exp(-e.deltaY * .0015), w.fitS * w.dpr, 4);
+  if (nk <= w.fitS * w.dpr * 1.001) { ui.zoom = { fit: true, k: 1, cx: .5, cy: .5 }; render(true); return; }
+  const vr = vp.getBoundingClientRect(), nds = nk / w.dpr;
+  ui.zoom = { fit: false, k: nk, cx: u - (e.clientX - (vr.left + vr.width / 2)) / nds / w.W, cy: v - (e.clientY - (vr.top + vr.height / 2)) / nds / w.H };
+  render(true);
+}, { passive: false });
+function setZoom(z) { ui.zoom = z === 'fit' ? { fit: true, k: 1, cx: .5, cy: .5 } : { fit: false, k: +z, cx: ui.zoom.fit ? .5 : ui.zoom.cx, cy: ui.zoom.fit ? .5 : ui.zoom.cy }; render(); }
+function toggleFull() { const s = $('stage'); if (document.fullscreenElement) document.exitFullscreen(); else if (s.requestFullscreen) s.requestFullscreen().catch(() => say('Full screen is not available here')); }
+document.addEventListener('fullscreenchange', () => setTimeout(() => render(), 60));
+new ResizeObserver(() => render()).observe(vp);
+
+/* ---------------------------------------------------------------- export */
+$('oTarget').innerHTML = Object.entries(TARGETS).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('');
+$('oAspect').innerHTML = ASPECTS.map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
+function syncExport() {
+  const o = ui.out, [W, H] = outputSize(), mm = v => Math.round(v / +o.dpi * 25.4), print = TARGETS[o.target][1] === 'mm';
+  $('fmtSeg').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === o.fmt));
+  $('oTarget').value = o.target; $('oAspect').value = o.aspect; $('oDpi').value = o.dpi; $('oW').value = o.cw; $('oH').value = o.ch;
+  $('customRow').classList.toggle('hidden', !(o.aspect === 'custom' || o.target === 'custom'));
+  $('dpiRow').classList.toggle('hidden', !print);
+  $('expMeta').textContent = `${W} × ${H} px` + (print ? ` · ${mm(W)} × ${mm(H)} mm` : '') + (o.fmt === 'svg' ? (C.isSegmented(state) ? ' · image and vector segments' : ' · image in SVG') : '');
+  $('bDoExport').textContent = 'Export ' + o.fmt.toUpperCase();
+}
+$('fmtSeg').querySelectorAll('button').forEach(b => b.addEventListener('click', () => { ui.out.fmt = b.dataset.v; saveUI(); syncExport(); }));
+[['oTarget', 'target'], ['oAspect', 'aspect'], ['oDpi', 'dpi']].forEach(([id, k]) => $(id).addEventListener('change', () => { ui.out[k] = $(id).value; saveUI(); syncExport(); render(); }));
+[['oW', 'cw'], ['oH', 'ch']].forEach(([id, k]) => $(id).addEventListener('change', () => { ui.out[k] = clamp(+$(id).value | 0, 16, 30000); saveUI(); syncExport(); render(); }));
+$('bDoExport').addEventListener('click', doExport);
+
+// PNG: streamed through deflate band by band, tagged sRGB with its dpi and the recipe
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function pngChunk(type, data) {
+  const head = new Uint8Array(8), dv = new DataView(head.buffer); dv.setUint32(0, data.length);
+  for (let i = 0; i < 4; i++) head[4 + i] = type.charCodeAt(i);
+  let c = 0xFFFFFFFF;
+  for (let i = 4; i < 8; i++) c = CRC_T[(c ^ head[i]) & 255] ^ (c >>> 8);
+  for (let i = 0; i < data.length; i++) c = CRC_T[(c ^ data[i]) & 255] ^ (c >>> 8);
+  const tail = new Uint8Array(4); new DataView(tail.buffer).setUint32(0, (c ^ 0xFFFFFFFF) >>> 0);
+  return [head, data, tail];
+}
+const latin1 = s => { const b = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i) & 255; return b; };
+class PngWriter {
+  constructor(W, H, dpi, text) {
+    this.W = W;
+    const ihdr = new Uint8Array(13), dv = new DataView(ihdr.buffer); dv.setUint32(0, W); dv.setUint32(4, H); ihdr[8] = 8; ihdr[9] = 2;
+    const phys = new Uint8Array(9), pv = new DataView(phys.buffer), ppm = Math.round(dpi / .0254); pv.setUint32(0, ppm); pv.setUint32(4, ppm); phys[8] = 1;
+    this.parts = [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), ...pngChunk('IHDR', ihdr), ...pngChunk('sRGB', new Uint8Array([0])), ...pngChunk('pHYs', phys)];
+    for (const [k, v] of Object.entries(text)) this.parts.push(...pngChunk('tEXt', latin1(k + '\0' + v)));
+    const cs = new CompressionStream('deflate'); this.w = cs.writable.getWriter();
+    this.done = (async () => { const r = cs.readable.getReader(); for (;;) { const { value, done } = await r.read(); if (done) break; this.parts.push(...pngChunk('IDAT', value)); } })();
+  }
+  async write(rgba, rows) {
+    const W = this.W, line = W * 3 + 1, buf = new Uint8Array(rows * line);
+    for (let y = 0; y < rows; y++) {
+      const o = y * line; buf[o] = 1;
+      for (let x = 0; x < W; x++) { const s = (y * W + x) * 4, d = o + 1 + x * 3; for (let c = 0; c < 3; c++) buf[d + c] = rgba[s + c] - (x ? rgba[s - 4 + c] : 0); }
+    }
+    await this.w.write(buf);
+  }
+  async finish() { await this.w.close(); await this.done; this.parts.push(...pngChunk('IEND', new Uint8Array(0))); return new Blob(this.parts, { type: 'image/png' }); }
+}
+let busy = false, cancel = false;
+function setBusy(on) {
+  busy = on; cancel = false;
+  for (const id of ['bGen', 'bGenMore', 'bDoExport']) $(id).disabled = on;
+  $('expProg').classList.toggle('hidden', !on); $('cancelRow').classList.toggle('hidden', !on); $('busyBar').classList.toggle('hidden', !on);
+  if (!on) { $('expProg').firstChild.style.width = '0'; $('busyBar').firstChild.style.width = '0'; }
+}
+$('bCancel').addEventListener('click', () => { cancel = true; });
+// SVG: the full-resolution PNG inside an SVG at the physical size, the segments as real vector rectangles (an invisible,
+// named group, for masking, cutting or aligning in a design tool) and the recipe in its metadata. The gradients stay
+// pixels: warped OKLab fields with grain have no lossless form as SVG gradients.
+async function svgFrom(png, W, H, print) {
+  const mm = v => (v / +ui.out.dpi * 25.4).toFixed(2) + 'mm', recipe = C.encodeRecipe(state);
+  const parts = [`<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" ` +
+    `width="${print ? mm(W) : W}" height="${print ? mm(H) : H}" viewBox="0 0 ${W} ${H}">\n<title>Chroma ${esc(C.seedCode(state))}</title>\n` +
+    `<metadata id="chroma-recipe">${recipe}</metadata>\n<image id="artwork" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="none" xlink:href="data:image/png;base64,`];
+  const bytes = new Uint8Array(await png.arrayBuffer()), step = 3 * 16384;   // base64 in whole 3-byte groups, so the pieces join
+  for (let i = 0; i < bytes.length; i += step) parts.push(btoa(String.fromCharCode.apply(null, bytes.subarray(i, i + step))));
+  parts.push('"/>\n');
+  if (C.isSegmented(state)) {
+    const t = C.segTiling(state, W / H), [fx, fy] = t.frame, px = (v, f, S) => ((v / f + .5) * S).toFixed(3);
+    parts.push('<g id="segments" fill="none" stroke="none">\n');
+    t.rects.forEach((r, i) => parts.push(`<rect id="segment-${i + 1}" x="${px(r[0], fx, W)}" y="${px(r[1], fy, H)}" width="${((r[2] - r[0]) / fx * W).toFixed(3)}" height="${((r[3] - r[1]) / fy * H).toFixed(3)}"/>\n`));
+    parts.push('</g>\n');
+  }
+  parts.push('</svg>\n');
+  return new Blob(parts, { type: 'image/svg+xml' });
+}
+function download(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 10000); }
+async function doExport() {
+  if (!engine || busy) return;
+  const [W, H] = outputSize(), fmt = ui.out.fmt, name = `chroma-${C.seedCode(state).replace(/[.+~]/g, '-')}-${W}x${H}`;
+  if (W * H > 450e6) { say('That size is more than a browser can render'); return; }
+  if (fmt === 'jpeg' && (W > 16384 || H > 16384 || W * H > 200e6)) { say('JPEG stops at 16384 px — choose PNG for this size'); return; }
+  if (fmt !== 'jpeg' && !('CompressionStream' in window)) { say('This browser cannot write large PNGs — update it or choose JPEG'); return; }
+  if (fmt === 'svg' && W * H > 100e6) { say('SVG stops at 100 megapixels — choose PNG for this size'); return; }
+  setBusy(true);
+  const sc = C.compile(state, W / H, {});
+  const prog = f => { const w = (f * 100).toFixed(1) + '%'; $('expProg').firstChild.style.width = w; $('busyBar').firstChild.style.width = w; };
+  try {
+    let blob;
+    if (fmt === 'png' || fmt === 'svg') {
+      const png = new PngWriter(W, H, +ui.out.dpi, { Software: 'Chroma', Chroma: C.encodeRecipe(state) });
+      await engine.exportTiles(sc, W, H, (rgba, y0, rows) => png.write(rgba, rows), prog, () => cancel);
+      blob = await png.finish();
+      if (fmt === 'svg') blob = await svgFrom(blob, W, H, TARGETS[ui.out.target][1] === 'mm');
+    } else {
+      const c = document.createElement('canvas'); c.width = W; c.height = H;
+      const x = c.getContext('2d'); if (!x) throw new Error('the browser could not allocate this size');
+      await engine.exportTiles(sc, W, H, (rgba, y0, rows) => { x.putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer), W, rows), 0, y0); }, prog, () => cancel);
+      blob = await new Promise(r => c.toBlob(r, 'image/jpeg', .95));
+      if (!blob) throw new Error('the browser could not encode a JPEG this large');
+    }
+    download(blob, name + ({ jpeg: '.jpg', svg: '.svg' }[fmt] || '.png'));
+    say(`Exported ${W} × ${H}`); closePops();
+  } catch (e) { say(e.message === 'cancelled' ? 'Export cancelled' : 'Export failed: ' + e.message); console.error(e); }
+  finally { setBusy(false); engine.invalidate(); render(); }
+}
+function readPngRecipe(buf) {
+  const b = new Uint8Array(buf), dv = new DataView(buf); let p = 8;
+  while (p + 8 <= b.length) {
+    const len = dv.getUint32(p), type = String.fromCharCode(b[p + 4], b[p + 5], b[p + 6], b[p + 7]);
+    if (type === 'tEXt') { let s = ''; for (let i = 0; i < len; i++) s += String.fromCharCode(b[p + 8 + i]); const k = s.indexOf('\0'); if (s.slice(0, k) === 'Chroma') return s.slice(k + 1); }
+    if (type === 'IDAT') break;
+    p += 12 + len;
+  }
+  return null;
+}
+vp.addEventListener('dragover', e => { e.preventDefault(); vp.classList.add('drop'); });
+vp.addEventListener('dragleave', () => vp.classList.remove('drop'));
+vp.addEventListener('drop', async e => {
+  e.preventDefault(); vp.classList.remove('drop');
+  const f = e.dataTransfer.files[0]; if (!f) return;
+  const r = readPngRecipe(await f.arrayBuffer());
+  if (r) applyText(r); else say('That image was not made with Chroma');
+});
+
+/* ---------------------------------------------------------------- keyboard */
+window.addEventListener('keydown', e => {
+  const t = e.target, typing = t.matches('input.field, input[type=number], select, textarea');
+  if (e.key === 'Escape') { closePops(); setDrawer(false); return; }
+  if (busy) return;
+  const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
+  if (mod && k === 'z' && !typing) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+  if (mod && k === 'y' && !typing) { e.preventDefault(); redo(); return; }
+  if (typing || mod || e.altKey) return;
+  if (t.matches('input[type=range]') && k.startsWith('arrow')) return;
+  if (k === 'g' || k === ' ') { e.preventDefault(); generate(); }
+  else if (k === 'r') regenerate(); else if (k === 'v') variation(); else if (k === 'x') randomize();
+  else if (k === 'f') toggleFull(); else if (k === '0') setZoom('fit'); else if (k === '1') setZoom(1);
+  else if (k === 'arrowleft' || k === 'arrowright') {
+    const cur = C.encodeRecipe(state), i = hist.findIndex(h => h.r === cur), j = k === 'arrowleft' ? i + 1 : i - 1;
+    if (hist[j]) { state = normalize(C.decodeRecipe(hist[j].r)); syncAll(); render(); commit(); if (ui.drawer) drawStrip(); }
+  }
+});
+
+/* ---------------------------------------------------------------- start */
+const failed = e => {
+  console.error(e);
+  $('vp').innerHTML = `<div class="nogl"><b>Chroma could not start.</b><br>${esc(e.message)}<br><br>It needs WebGL2, which current Chrome, Edge, Firefox and Safari support. If hardware acceleration is off, turn it on.</div>`;
+};
+try {
+  // the shaders compile in the background; the interface works meanwhile and the image appears once they are ready
+  const eng = window.ChromaEngine.create(view, () => { busy = true; say('The graphics processor was reset — reload to continue'); });
+  const slow = setTimeout(() => { if (!engine) { $('toast').textContent = 'Preparing the renderer…'; $('toast').classList.add('show'); } }, 400);
+  let restored = null;
+  try { const last = LS.get('last', null); if (last) restored = normalize(C.decodeRecipe(last)); } catch (e) { restored = null; }
+  if (restored) { state = restored; syncAll(); commit(); }
+  else { const s = C.newSeed(); state = normalize(C.freshState(chooseStyle(s), { style: s, comp: C.newSeed(), v: 0, detail: C.newSeed() })); landed(); }
+  syncUndo();
+  eng.ready.then(() => { clearTimeout(slow); engine = eng; $('toast').classList.remove('show'); render(); }, failed);
+} catch (e) { failed(e); }
+</script>
+</body>
+</html>
